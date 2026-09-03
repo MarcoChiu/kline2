@@ -1,4 +1,4 @@
-import { BookOpen, Key, Sparkles, BarChart2, Bookmark, TrendingUp } from 'lucide-react';
+import { BookOpen, Key, Sparkles, BarChart2, TrendingUp } from 'lucide-react';
 
 export default function Header({ activeTab, setActiveTab, hasApiKey, onOpenApiKeyModal }) {
   const buildTime = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'DEV';
@@ -49,14 +49,7 @@ export default function Header({ activeTab, setActiveTab, hasApiKey, onOpenApiKe
             <Sparkles size={15} />
             <span>K 線分析儀</span>
           </button>
-          
-          <button
-            className={`nav-tab ${activeTab === 'plans' ? 'active' : ''}`}
-            onClick={() => setActiveTab('plans')}
-          >
-            <Bookmark size={15} color="#60a5fa" />
-            <span>交易計畫與追蹤</span>
-          </button>
+
 
           <button
             className={`nav-tab ${activeTab === 'encyclopedia' ? 'active' : ''}`}

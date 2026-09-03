@@ -86,6 +86,82 @@ ${candles.map((c, i) => {
 }
 
 /**
+ * 拍照 / 圖片辨識 K 線形態 (多模態視覺辨識)
+ */
+export async function analyzeKlineImageForEncyclopedia(base64Image, apiKey = null, selectedModel = 'auto') {
+  if (!apiKey || apiKey.trim().length < 10) {
+    throw new Error('請先設定 Gemini API Key 才能進行圖片拍照辨識');
+  }
+
+  let mimeType = 'image/png';
+  let cleanBase64 = base64Image;
+
+  const dataUriMatch = base64Image.match(/^data:(image\/[a-zA-Z0-9\-+.]+);base64,([\s\S]+)$/);
+  if (dataUriMatch) {
+    mimeType = dataUriMatch[1];
+    cleanBase64 = dataUriMatch[2].replace(/\s/g, '');
+  } else {
+    cleanBase64 = base64Image.replace(/\s/g, '');
+  }
+
+  const patternReferenceList = KLINE_PATTERNS.map(p => `${p.id}: ${p.name} (${p.chineseName})`).join(', ');
+
+  const prompt = `你是一位專業嚴謹客觀的量化技術與籌碼分析師。
+請仔細觀察並視覺辨識這張股票 K 線圖表中的核心 K 棒形態或最新走勢特徵。
+
+我們內建的 52 種 K 線形態庫 ID 參考如下：
+${patternReferenceList}
+
+請從技術形態學物理力道出發，特別針對「新手」給出極度精確、直截了當的買賣結論（不需要冗長晦澀的學術解釋）。
+
+請嚴格以繁體中文輸出以下 JSON 格式（嚴禁輸出任何 markdown 標記以外的閒聊字眼，嚴禁在文字中使用任何表情符號）：
+{
+  "patternName": "辨識出的核心形態名稱 (例如：大陽線突破、早晨之星、低檔槌子線、高檔射擊之星、多頭吞噬等)",
+  "matchedPatternId": "若符合上述 52 種常見形態之一，請填寫最精確的 ID (例如 'big_bull', 'morning_star', 'hammer' 等；若無精確吻合則填 null)",
+  "actionDecision": "強制從這三個詞中選一個輸出：【買進】、【觀望】、【賣出】。絕對不可輸出其他詞彙",
+  "canBuyText": "可以買進 或 建議賣出 或 觀望等待",
+  "beginnerSummary": "一句話告訴新手現在該怎麼做 (簡短直接，例如：'出現多方轉折起漲訊號，回測不破低點可買進' 或 '高檔爆量長黑出貨，持股者應立即賣出，空手者切勿接刀')",
+  "stopLossPoint": "防守停損位置建議 (例如：'跌破此形態最低點無條件停損出場')",
+  "winRate": 80,
+  "sentiment": "bullish 或 bearish 或 neutral",
+  "keyReason": "極簡一句話點出多空力道關鍵 (例如：'長下影線探底帶出強勁支撐買盤')"
+}`;
+
+  let availableModels = [];
+  try {
+    availableModels = await fetchAvailableGeminiModels(apiKey);
+  } catch (err) {
+    console.warn('無法取得 Gemini 模型清單，改用內建備援清單:', err.message);
+  }
+
+  const modelsToTry = getGeminiModelCandidates(selectedModel, availableModels);
+  let lastError = null;
+
+  for (const model of modelsToTry) {
+    try {
+      const response = await requestGeminiModel(model, apiKey.trim(), prompt, mimeType, cleanBase64);
+      if (!response.ok) {
+        const errorJson = await response.json().catch(() => ({}));
+        lastError = new Error(`[${model}] ${errorJson.error?.message || response.statusText}`);
+        continue;
+      }
+
+      const data = await response.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) continue;
+
+      const parsed = parseGeminiJson(rawText);
+      return parsed;
+    } catch (err) {
+      console.warn(`[${model}] 圖片形態辨識失敗，嘗試後備模型:`, err);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('圖片形態辨識失敗，請檢查 API Key 是否有效。');
+}
+
+/**
  * 呼叫 Google Gemini 進行純數據分析
  */
 async function callGeminiDataAnalysis(stockData, apiKey, selectedModel = 'auto', patternCount = 12, marketContext = null) {

@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import Header from './components/Header';
 import StockInput from './components/StockInput';
 import AnalysisResult from './components/AnalysisResult';
-import TradePlanJournal from './components/TradePlanJournal';
 import PatternEncyclopedia from './components/PatternEncyclopedia';
 import InteractiveCanvas from './components/InteractiveCanvas';
 import ApiKeyModal from './components/ApiKeyModal';
@@ -13,7 +12,7 @@ import { fetchStockData, fetchMarketContextData } from './services/yahooFinanceS
 import confetti from 'canvas-confetti';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('analyzer'); // 'analyzer' | 'plans' | 'encyclopedia' | 'simulator'
+  const [activeTab, setActiveTab] = useState('analyzer'); // 'analyzer' | 'encyclopedia' | 'simulator'
   const [analysisResult, setAnalysisResult] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [apiKey, setApiKey] = useState('');
@@ -103,25 +102,7 @@ export default function App() {
         }
       });
 
-      // 自動記錄至 AI 預測成效歷史快照 (LocalStorage)
-      try {
-        const existingLogs = JSON.parse(localStorage.getItem('kline_prediction_history') || '[]');
-        const isBull = (result?.prediction?.bullishProbability ?? 50) >= (result?.prediction?.bearishProbability ?? 50);
-        const newLog = {
-          id: `pred_${Date.now()}`,
-          date: new Date().toISOString(),
-          stockCode: result?.stockCode || stockCode,
-          stockName: finalStockName,
-          sentiment: isBull ? 'bullish' : 'bearish',
-          probability: isBull ? result?.prediction?.bullishProbability : result?.prediction?.bearishProbability,
-          initialPrice: result?.closePrice || result?.currentPrice || stockData?.latest?.close,
-          patternName: result?.detectedPatterns?.[0]?.name || '形態分析'
-        };
-        existingLogs.unshift(newLog);
-        localStorage.setItem('kline_prediction_history', JSON.stringify(existingLogs.slice(0, 100)));
-      } catch (e) {
-        console.warn('儲存預測快照失敗:', e);
-      }
+
 
       confetti({
         particleCount: 40,
@@ -172,17 +153,13 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'plans' && (
-          <TradePlanJournal
-            onSelectStockToAnalyze={(stockCode) => {
-              handleStockSubmit(stockCode);
-            }}
-          />
-        )}
 
         {activeTab === 'encyclopedia' && (
           <PatternEncyclopedia
             onLoadToSimulator={handleLoadToSimulator}
+            apiKey={apiKey}
+            selectedModel={selectedModel}
+            onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
           />
         )}
 
