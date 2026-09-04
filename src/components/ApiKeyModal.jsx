@@ -1,11 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Key, ShieldCheck, ExternalLink, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { Key, ShieldCheck, ExternalLink, CheckCircle2, AlertCircle, RefreshCw, Globe, ChevronDown, ChevronUp } from 'lucide-react';
 import { GEMINI_MODEL_OPTIONS, fetchAvailableGeminiModels, getGeminiModelCandidates } from '../services/aiVisionService';
 
 export default function ApiKeyModal({ isOpen, onClose, apiKey, onSaveApiKey, selectedModel = 'auto', onSaveModel, patternCount = 12, onSavePatternCount }) {
   const [inputKey, setInputKey] = useState(apiKey || '');
   const [model, setModel] = useState(selectedModel || 'auto');
   const [localPatternCount, setLocalPatternCount] = useState(patternCount);
+  const [corsproxyKey, setCorsproxyKey] = useState(() => {
+    try {
+      return localStorage.getItem('kline_corsproxy_api_key') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [customProxy, setCustomProxy] = useState(() => {
+    try {
+      return localStorage.getItem('kline_custom_proxy') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [showAdvancedProxy, setShowAdvancedProxy] = useState(false);
   const [testStatus, setTestStatus] = useState(null); // null | 'testing' | 'success' | 'error'
   const [testMessage, setTestMessage] = useState('');
 
@@ -80,6 +95,20 @@ export default function ApiKeyModal({ isOpen, onClose, apiKey, onSaveApiKey, sel
     onSaveApiKey(inputKey.trim());
     if (onSaveModel) onSaveModel(model);
     if (onSavePatternCount) onSavePatternCount(localPatternCount);
+    try {
+      if (corsproxyKey.trim()) {
+        localStorage.setItem('kline_corsproxy_api_key', corsproxyKey.trim());
+      } else {
+        localStorage.removeItem('kline_corsproxy_api_key');
+      }
+      if (customProxy.trim()) {
+        localStorage.setItem('kline_custom_proxy', customProxy.trim());
+      } else {
+        localStorage.removeItem('kline_custom_proxy');
+      }
+    } catch {
+      // 忽略
+    }
     onClose();
   };
 
@@ -250,6 +279,86 @@ export default function ApiKeyModal({ isOpen, onClose, apiKey, onSaveApiKey, sel
                 前往 Google AI Studio 申請免費 Key <ExternalLink size={12} />
             </a>
           </div>
+        </div>
+
+        {/* 跨市場 / 代理備援設定 (選填) */}
+        <div style={{ marginBottom: '20px', borderTop: '1px solid var(--border-subtle)', paddingTop: '14px' }}>
+          <button
+            type="button"
+            onClick={() => setShowAdvancedProxy(!showAdvancedProxy)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-secondary)',
+              fontSize: '0.82rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+              cursor: 'pointer',
+              padding: 0
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '600' }}>
+              <Globe size={14} color="#60a5fa" />
+              跨市場美股與代理備援設定 (選填)
+            </span>
+            {showAdvancedProxy ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+
+          {showAdvancedProxy && (
+            <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(0,0,0,0.25)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <p style={{ fontSize: '0.78rem', color: '#94a3b8', lineHeight: '1.4', marginBottom: '12px' }}>
+                💡 <b>台股與台指期已全面原生直連 FinMind 官方開放資料集</b>，速度極快且免代理、免 Key 即可正常載入。若在 GitHub Pages 上查詢非台股/美股等標的，可配置 Corsproxy.io API Key 或自訂 Proxy。
+              </p>
+
+              <div style={{ marginBottom: '10px' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: '#cbd5e1', marginBottom: '4px' }}>
+                  Corsproxy.io API Key (選填)：
+                </label>
+                <input
+                  type="text"
+                  placeholder="可選填 corsproxy.io API Key"
+                  value={corsproxyKey}
+                  onChange={(e) => setCorsproxyKey(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'rgba(0,0,0,0.4)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    color: '#fff',
+                    fontSize: '0.82rem',
+                    fontFamily: 'monospace',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: '#cbd5e1', marginBottom: '4px' }}>
+                  自訂 CORS Proxy URL (選填)：
+                </label>
+                <input
+                  type="text"
+                  placeholder="例如：https://my-proxy.workers.dev/?url="
+                  value={customProxy}
+                  onChange={(e) => setCustomProxy(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'rgba(0,0,0,0.4)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    color: '#fff',
+                    fontSize: '0.82rem',
+                    fontFamily: 'monospace',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
