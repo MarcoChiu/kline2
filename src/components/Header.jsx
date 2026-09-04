@@ -1,6 +1,6 @@
-import { BookOpen, Key, Sparkles, BarChart2, TrendingUp } from 'lucide-react';
+import { BookOpen, Key, Sparkles, BarChart2, TrendingUp, Globe } from 'lucide-react';
 
-export default function Header({ activeTab, setActiveTab, hasApiKey, onOpenApiKeyModal }) {
+export default function Header({ activeTab, setActiveTab, hasApiKey, onOpenApiKeyModal, hasCustomProxy, onOpenProxyModal }) {
   const buildTime = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'DEV';
 
   return (
@@ -50,7 +50,6 @@ export default function Header({ activeTab, setActiveTab, hasApiKey, onOpenApiKe
             <span>K 線分析儀</span>
           </button>
 
-
           <button
             className={`nav-tab ${activeTab === 'encyclopedia' ? 'active' : ''}`}
             onClick={() => setActiveTab('encyclopedia')}
@@ -68,12 +67,32 @@ export default function Header({ activeTab, setActiveTab, hasApiKey, onOpenApiKe
           </button>
         </nav>
 
-        {/* API Key Action */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* API Key & Cloudflare Proxy Actions */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            onClick={onOpenProxyModal || onOpenApiKeyModal}
+            className="btn-secondary"
+            style={{
+              fontSize: '0.8rem',
+              padding: '6px 12px',
+              borderColor: hasCustomProxy ? 'rgba(16, 185, 129, 0.4)' : undefined,
+              background: hasCustomProxy ? 'rgba(16, 185, 129, 0.08)' : undefined
+            }}
+            title="配置專屬 Cloudflare Worker 代理以獲取美股與國際指數（解決 403 跨網域問題）"
+          >
+            <Globe size={14} color={hasCustomProxy ? '#10b981' : '#60a5fa'} />
+            <span>{hasCustomProxy ? 'Worker 代理已啟用' : '配置 Cloudflare 代理'}</span>
+          </button>
+
           <button
             onClick={onOpenApiKeyModal}
             className="btn-secondary"
-            style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+            style={{
+              fontSize: '0.8rem',
+              padding: '6px 12px',
+              borderColor: hasApiKey ? 'rgba(16, 185, 129, 0.4)' : undefined,
+              background: hasApiKey ? 'rgba(16, 185, 129, 0.08)' : undefined
+            }}
             title="設定 Google Gemini API Key 以啟用完整雲端神經網路辨識"
           >
             <Key size={14} color={hasApiKey ? '#10b981' : '#f59e0b'} />

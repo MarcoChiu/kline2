@@ -19,6 +19,14 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
   const [patternCount, setPatternCount] = useState(12);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [modalInitialTab, setModalInitialTab] = useState('key'); // 'key' | 'proxy'
+  const [customProxy, setCustomProxy] = useState(() => {
+    try {
+      return localStorage.getItem('kline_custom_proxy') || '';
+    } catch {
+      return '';
+    }
+  });
 
   const [loadedSimulatorPattern, setLoadedSimulatorPattern] = useState(null);
 
@@ -36,7 +44,24 @@ export default function App() {
 
     const savedPatternCount = localStorage.getItem('kline_pattern_count');
     if (savedPatternCount) setPatternCount(Number(savedPatternCount));
+
+    const savedProxy = localStorage.getItem('kline_custom_proxy');
+    if (savedProxy) setCustomProxy(savedProxy);
   }, []);
+
+  const handleOpenModal = (tab = 'key') => {
+    setModalInitialTab(tab);
+    setIsApiKeyModalOpen(true);
+  };
+
+  const handleSaveCustomProxy = (proxy) => {
+    setCustomProxy(proxy || '');
+    if (proxy) {
+      localStorage.setItem('kline_custom_proxy', proxy);
+    } else {
+      localStorage.removeItem('kline_custom_proxy');
+    }
+  };
 
   const handleSaveApiKey = (key) => {
     setApiKey(key);
@@ -128,7 +153,9 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         hasApiKey={!!apiKey}
-        onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
+        onOpenApiKeyModal={() => handleOpenModal('key')}
+        hasCustomProxy={!!customProxy}
+        onOpenProxyModal={() => handleOpenModal('proxy')}
       />
 
       {/* 主要內容區 */}
@@ -145,7 +172,7 @@ export default function App() {
               result={analysisResult}
               isAnalyzing={isAnalyzing}
               hasApiKey={!!apiKey}
-              onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
+              onOpenApiKeyModal={() => handleOpenModal('key')}
               onSelectPatternView={() => {
                 setActiveTab('encyclopedia');
               }}
@@ -159,7 +186,7 @@ export default function App() {
             onLoadToSimulator={handleLoadToSimulator}
             apiKey={apiKey}
             selectedModel={selectedModel}
-            onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
+            onOpenApiKeyModal={() => handleOpenModal('key')}
           />
         )}
 
@@ -169,7 +196,7 @@ export default function App() {
             onClearLoadedPattern={() => setLoadedSimulatorPattern(null)}
             apiKey={apiKey}
             selectedModel={selectedModel}
-            onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
+            onOpenApiKeyModal={() => handleOpenModal('key')}
           />
         )}
 
@@ -186,16 +213,18 @@ export default function App() {
         </p>
       </footer>
 
-      {/* API Key & Model Modal */}
+      {/* API Key & Model / Cloudflare Proxy Modal */}
       <ApiKeyModal
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
+        initialTab={modalInitialTab}
         apiKey={apiKey}
         onSaveApiKey={handleSaveApiKey}
         selectedModel={selectedModel}
         onSaveModel={handleSaveModel}
         patternCount={patternCount}
         onSavePatternCount={handleSavePatternCount}
+        onSaveCustomProxy={handleSaveCustomProxy}
       />
 
       {/* Back to Top 浮動按鈕 */}
