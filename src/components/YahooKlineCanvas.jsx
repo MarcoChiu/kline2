@@ -549,8 +549,8 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
         // 懸浮時浮現精緻形態氣泡
         if (isHovered) {
           ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-          const tipText = `🔥 ${pMatch.name}`;
-          const tipWidth = ctx.measureText(tipText).width + 12;
+          const tipText = pMatch.date ? `🔥 ${pMatch.date} ${pMatch.name}` : `🔥 ${pMatch.name}`;
+          const tipWidth = ctx.measureText(tipText).width + 14;
           const tipH = 18;
           const tipX = Math.max(paddingLeft, Math.min(px - tipWidth / 2, width - paddingRight - tipWidth));
           const tipY = isBull ? py + 10 : py - 22;
@@ -980,7 +980,7 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
           </div>
         ) : <div />}
 
-        {/* 右側：【形態戰法 點擊詳解】按鈕（永久固定在上方，圖層內不再有遮擋黑框，手機極致友善！） */}
+        {/* 右側：【形態戰法 點擊詳解】按鈕（永久固定在上方，統一保證 100% 標註精準日期，手機極致友善！） */}
         {displayPattern && (
           <button
             type="button"
@@ -988,7 +988,7 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '6px',
+              gap: '8px',
               padding: '6px 14px',
               borderRadius: '6px',
               background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
@@ -1003,7 +1003,20 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
             }}
             title="點擊查看形態戰法、主力心理與實戰回測教學"
           >
-            <span>🔥 {isHoveringPastCandle && displayPattern.date ? `${displayPattern.date} ` : ''}{displayPattern.name}</span>
+            {patternDate && (
+              <span style={{
+                background: 'rgba(56, 189, 248, 0.18)',
+                color: '#7dd3fc',
+                padding: '2px 7px',
+                borderRadius: '4px',
+                fontSize: '0.74rem',
+                fontWeight: '700',
+                fontFamily: '"JetBrains Mono", monospace'
+              }}>
+                {patternDate}
+              </span>
+            )}
+            <span>🔥 {displayPattern.name}</span>
             <span style={{
               fontSize: '0.72rem',
               background: '#0284c7',
