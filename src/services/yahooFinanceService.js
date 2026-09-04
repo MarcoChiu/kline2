@@ -203,11 +203,123 @@ async function fetchStockDataFromFinMind(stockCode, days = 90) {
     }
 
     const finalSymbol = `${cleanCode}${symbolSuffix}`;
+    // 自動同步並合併當日盤中/最新報價（防止因歷史資料庫尚未入庫而停留於昨日）
+    stockName = await enrichWithLatestTaiwanStockQuote(validData, cleanCode, symbolSuffix, stockName);
+
     return formatKLineDataSet(validData, finalSymbol, stockName, {}, days);
   } catch (err) {
     console.warn(`FinMind 載入 ${cleanCode} 失敗，將轉向 Yahoo Finance:`, err.message);
     return null;
   }
+}
+
+/**
+ * 自動補充/同步台股當日最新盤中或最新收盤即時報價，確保不會因歷史資料庫尚未批次入庫而停留於昨日
+ */
+async function enrichWithLatestTaiwanStockQuote(validData, cleanCode, symbolSuffix, currentName) {
+  if (!validData || validData.length === 0) return currentName;
+
+  const finalSymbol = `${cleanCode}${symbolSuffix}`;
+  let liveQuote = null;
+  let detectedName = currentName;
+
+  const isLocalDev = typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+  // 1. 本地開發環境：優先透過 Vite Proxy 抓取 Yahoo 奇摩即時盤 (盤中即時更新、速度極快)
+  if (isLocalDev) {
+    try {
+      const url = `/api/yahoo-tw/_td-stock/api/resource/StockServices.stockList;symbols=%5B%22${encodeURIComponent(finalSymbol)}%22%5D`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        const json = await res.json();
+        const item = json?.[0];
+        if (item && item.price?.raw) {
+          const rawPrice = parseFloat(item.price.raw);
+          if (!isNaN(rawPrice) && rawPrice > 0) {
+            const rawOpen = parseFloat(item.regularMarketOpen?.raw || item.price.raw);
+            const rawHigh = parseFloat(item.regularMarketDayHigh?.raw || item.price.raw);
+            const rawLow = parseFloat(item.regularMarketDayLow?.raw || item.price.raw);
+            const rawVol = parseInt(item.volume || 0, 10);
+            const dateStr = item.regularMarketTime
+              ? new Date(item.regularMarketTime).toISOString().split('T')[0]
+              : new Date().toISOString().split('T')[0];
+
+            liveQuote = {
+              date: dateStr,
+              open: Number(rawOpen.toFixed(2)),
+              high: Number(rawHigh.toFixed(2)),
+              low: Number(rawLow.toFixed(2)),
+              close: Number(rawPrice.toFixed(2)),
+              volume: rawVol
+            };
+            if (item.symbolName) {
+              detectedName = item.symbolName;
+            }
+          }
+        }
+      }
+    } catch {
+      // 忽略錯誤，繼續嘗試下一來源
+    }
+  }
+
+  // 2. 證交所 TWSE STOCK_DAY 官方開放資料 (原生 Access-Control-Allow-Origin: *，免代理)
+  if (!liveQuote && symbolSuffix === '.TW') {
+    try {
+      const twseUrl = `https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?stockNo=${cleanCode}&response=json`;
+      const res = await fetch(twseUrl, { signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const json = await res.json();
+        const rows = json.data;
+        if (Array.isArray(rows) && rows.length > 0) {
+          const lastRow = rows[rows.length - 1];
+          // 民國年格式，例如 "115/09/04"
+          const dateParts = lastRow[0]?.split('/');
+          if (dateParts && dateParts.length === 3) {
+            const adYear = parseInt(dateParts[0], 10) + 1911;
+            const dateStr = `${adYear}-${dateParts[1].padStart(2, '0')}-${dateParts[2].padStart(2, '0')}`;
+            const vol = parseInt(lastRow[1]?.replace(/,/g, '') || 0, 10);
+            const o = parseFloat(lastRow[3]?.replace(/,/g, ''));
+            const h = parseFloat(lastRow[4]?.replace(/,/g, ''));
+            const l = parseFloat(lastRow[5]?.replace(/,/g, ''));
+            const c = parseFloat(lastRow[6]?.replace(/,/g, ''));
+
+            if (!isNaN(c) && c > 0) {
+              liveQuote = {
+                date: dateStr,
+                open: Number((isNaN(o) ? c : o).toFixed(2)),
+                high: Number((isNaN(h) ? c : h).toFixed(2)),
+                low: Number((isNaN(l) ? c : l).toFixed(2)),
+                close: Number(c.toFixed(2)),
+                volume: vol
+              };
+            }
+          }
+        }
+      }
+    } catch {
+      // 忽略錯誤
+    }
+  }
+
+  // 3. 若成功取得當日最新行情，進行日期比對與安全合併
+  if (liveQuote && liveQuote.date) {
+    const lastItem = validData[validData.length - 1];
+    if (lastItem.date === liveQuote.date) {
+      // 若歷史庫已含當日，以即時盤行情覆蓋更新至最新盤中狀態
+      lastItem.open = liveQuote.open;
+      lastItem.high = Math.max(lastItem.high, liveQuote.high);
+      lastItem.low = Math.min(lastItem.low, liveQuote.low);
+      lastItem.close = liveQuote.close;
+      lastItem.volume = Math.max(lastItem.volume, liveQuote.volume);
+    } else if (liveQuote.date > lastItem.date) {
+      // 若歷史庫只到昨日，而即時盤已有當日交易數據，追加當日最新 K 棒
+      validData.push(liveQuote);
+    }
+  }
+
+  return detectedName;
 }
 
 /**
@@ -422,6 +534,38 @@ export async function fetchSingleQuote(symbol, displayName = null) {
 
   // 加權指數 / 櫃買指數 原生免代理支援 (CORS 友善)
   if (symbol === '^TWII' || symbol === '^TWOII') {
+    const isLocalDev = typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+    // 1. 本地開發優先使用 Vite Proxy 抓取 Yahoo Finance 即時大盤行情
+    if (isLocalDev) {
+      try {
+        const url = `/api/yahoo-query/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=1d`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          const json = await res.json();
+          const result = json.chart?.result?.[0];
+          if (result?.meta?.regularMarketPrice) {
+            const meta = result.meta;
+            const price = Number(Number(meta.regularMarketPrice).toFixed(2));
+            const prevClose = Number(meta.chartPreviousClose || meta.previousClose || price);
+            const priceChange = Number((price - prevClose).toFixed(2));
+            const changePercent = prevClose ? Number(((priceChange / prevClose) * 100).toFixed(2)) : 0;
+            return {
+              symbol,
+              name: displayName || (symbol === '^TWII' ? '加權指數 (大盤)' : '櫃買指數 (OTC)'),
+              price,
+              priceChange,
+              changePercent
+            };
+          }
+        }
+      } catch {
+        // 降級至 FinMind
+      }
+    }
+
+    // 2. 透過 FinMind 開放資料庫取得指數報價
     const finMindId = symbol === '^TWII' ? 'TAIEX' : 'TPEx';
     const defaultName = symbol === '^TWII' ? '加權指數 (大盤)' : '櫃買指數 (OTC)';
     try {
