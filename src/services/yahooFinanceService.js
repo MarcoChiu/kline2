@@ -107,9 +107,48 @@ function formatKLineDataSet(validData, symbol, stockName, meta = {}, days = 90) 
 }
 
 /**
- * 取得可用之 Yahoo Finance 代理服務清單（排除報 403 之棄用無 Key Proxy）
+ * 智慧建構代理網址，支援直接輸入 Worker 根網址或帶有 ?url= 的格式
  */
-function getProxyList() {
+export function buildProxyUrl(proxy, targetUrl) {
+  if (proxy === 'LOCAL_VITE_PROXY') {
+    return targetUrl.replace('https://query1.finance.yahoo.com', '/api/yahoo-query');
+  }
+  const cleanProxy = proxy.trim();
+  if (cleanProxy.includes('?url=') || cleanProxy.endsWith('=')) {
+    return `${cleanProxy}${encodeURIComponent(targetUrl)}`;
+  }
+  if (cleanProxy.endsWith('/')) {
+    return `${cleanProxy}?url=${encodeURIComponent(targetUrl)}`;
+  }
+  return `${cleanProxy}/?url=${encodeURIComponent(targetUrl)}`;
+}
+
+/**
+ * 測試自訂 Proxy 或 Cloudflare Worker 連線能力與延遲
+ */
+export async function testProxyConnection(proxyUrl) {
+  if (!proxyUrl || !proxyUrl.trim()) {
+    throw new Error('請輸入 Proxy 網址');
+  }
+  const testTarget = 'https://query1.finance.yahoo.com/v8/finance/chart/2330.TW?range=1d&interval=1d';
+  const fullUrl = buildProxyUrl(proxyUrl.trim(), testTarget);
+  const startTime = Date.now();
+  const res = await fetch(fullUrl, { signal: AbortSignal.timeout(6000) });
+  const latency = Date.now() - startTime;
+  if (!res.ok) {
+    throw new Error(`伺服器回應 HTTP ${res.status} (${res.statusText})`);
+  }
+  const json = await res.json();
+  if (!json.chart?.result?.[0]) {
+    throw new Error('資料格式不符合 Yahoo Finance 規範');
+  }
+  return { success: true, latency };
+}
+
+/**
+ * 取得可用之 Yahoo Finance 代理服務清單（排除報 403 之棄用公共 Proxy）
+ */
+export function getProxyList() {
   const isLocalDev = typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
@@ -120,7 +159,7 @@ function getProxyList() {
     proxies.push('LOCAL_VITE_PROXY');
   }
 
-  // 2. 使用者於設定中配置的自訂 Proxy 或 Corsproxy.io API Key
+  // 2. 使用者於設定中配置的自訂 Proxy (如 Cloudflare Worker) 或 Corsproxy.io API Key
   try {
     const customProxy = typeof localStorage !== 'undefined' ? localStorage.getItem('kline_custom_proxy') : null;
     if (customProxy && customProxy.trim()) {
@@ -135,10 +174,7 @@ function getProxyList() {
     // 忽略 localStorage 異常
   }
 
-  // 3. 公開可用 CORS 代理備援（注意：corsproxy.io 未帶 Key 會報 403，故不再加入無 Key corsproxy.io）
-  proxies.push('https://api.allorigins.win/raw?url=');
-  proxies.push('https://api.codetabs.com/v1/proxy?quest=');
-
+  // 不再預設加入已遭 Yahoo 封鎖 403 之 public proxies (allorigins, codetabs)，防止瀏覽器噴滿 403 報錯
   return proxies;
 }
 
@@ -335,6 +371,9 @@ async function fetchStockDataFromYahoo(stockCode, days = 90) {
   const range = '2y';
   const interval = '1d';
   const proxies = getProxyList();
+  if (proxies.length === 0) {
+    throw new Error('非台股標的需透過 CORS 代理獲取。請點擊右上角「設定」配置您的專屬 Cloudflare Worker 代理，或於本地開發環境執行。');
+  }
 
   let lastError = null;
   let rawData = null;
@@ -345,13 +384,8 @@ async function fetchStockDataFromYahoo(stockCode, days = 90) {
 
     for (const sym of symbolsToTry) {
       try {
-        let url;
-        if (proxy === 'LOCAL_VITE_PROXY') {
-          url = `/api/yahoo-query/v8/finance/chart/${sym}?range=${range}&interval=${interval}`;
-        } else {
-          const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?range=${range}&interval=${interval}`;
-          url = proxy.endsWith('=') ? `${proxy}${encodeURIComponent(targetUrl)}` : `${proxy}${targetUrl}`;
-        }
+        const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?range=${range}&interval=${interval}`;
+        const url = buildProxyUrl(proxy, targetUrl);
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 7000);
@@ -600,16 +634,12 @@ export async function fetchSingleQuote(symbol, displayName = null) {
   const range = '5d';
   const interval = '1d';
   const proxies = getProxyList();
+  if (proxies.length === 0) return null;
 
   for (const proxy of proxies) {
     try {
-      let url;
-      if (proxy === 'LOCAL_VITE_PROXY') {
-        url = `/api/yahoo-query/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
-      } else {
-        const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
-        url = proxy.endsWith('=') ? `${proxy}${encodeURIComponent(targetUrl)}` : `${proxy}${targetUrl}`;
-      }
+      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
+      const url = buildProxyUrl(proxy, targetUrl);
 
       const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
       if (!response.ok) continue;
@@ -654,7 +684,7 @@ export async function fetchMarketContextData({ includeFutures = true, includeUS 
     usMarkets: []
   };
 
-  // 1. 台股期現貨抓取
+  // 1. 台股期現貨抓取 (原生 FinMind 直連，免代理)
   if (includeFutures) {
     const twSymbols = [
       { symbol: 'WTX&', name: '台指期近一 (夜盤/近月)' },
@@ -671,26 +701,31 @@ export async function fetchMarketContextData({ includeFutures = true, includeUS 
     });
   }
 
-  // 2. 美股與國際主要指數抓取
+  // 2. 美股與國際主要指數抓取 (若未配置 Proxy 則靜默略過，防止 403 報錯干擾)
   if (includeUS) {
-    const usSymbols = [
-      { symbol: '^SOX', name: '費城半導體' },
-      { symbol: '^IXIC', name: '那斯達克' },
-      { symbol: '^DJI', name: '道瓊工業' },
-      { symbol: '^GSPC', name: 'S&P 500' },
-      { symbol: 'TSM', name: '台積電 ADR' },
-      { symbol: 'NVDA', name: '輝達 (NVDA)' },
-      { symbol: '^N225', name: '日經 225' },
-      { symbol: '^HSI', name: '香港恒生' }
-    ];
+    const proxies = getProxyList();
+    if (proxies.length > 0) {
+      const usSymbols = [
+        { symbol: '^SOX', name: '費城半導體' },
+        { symbol: '^IXIC', name: '那斯達克' },
+        { symbol: '^DJI', name: '道瓊工業' },
+        { symbol: '^GSPC', name: 'S&P 500' },
+        { symbol: 'TSM', name: '台積電 ADR' },
+        { symbol: 'NVDA', name: '輝達 (NVDA)' },
+        { symbol: '^N225', name: '日經 225' },
+        { symbol: '^HSI', name: '香港恒生' }
+      ];
 
-    usSymbols.forEach(({ symbol, name }) => {
-      tasks.push(
-        fetchSingleQuote(symbol, name).then(data => {
-          if (data) results.usMarkets.push(data);
-        }).catch(() => {})
-      );
-    });
+      usSymbols.forEach(({ symbol, name }) => {
+        tasks.push(
+          fetchSingleQuote(symbol, name).then(data => {
+            if (data) results.usMarkets.push(data);
+          }).catch(() => {})
+        );
+      });
+    } else {
+      console.info('[MarketContext] 未設定 Cloudflare Worker 代理，略過美股跨市場數據抓取');
+    }
   }
 
   if (tasks.length > 0) {
