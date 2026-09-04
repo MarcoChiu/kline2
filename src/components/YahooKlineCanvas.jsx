@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useMemo } from 'react';
 import { Download, Layers } from 'lucide-react';
 import { KLINE_PATTERNS } from '../data/klinePatterns';
+import { detectHistoricalPatterns } from '../services/localQuantitativeService';
 
 /**
  * Yahoo 奇摩股市風格 K 線圖表與籌碼 K 線標註系統
@@ -8,8 +9,8 @@ import { KLINE_PATTERNS } from '../data/klinePatterns';
 export default function YahooKlineCanvas({ stockData, stockName: propStockName, prediction, detectedPatterns, onPatternClick }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
-  const badgeHitBoxRef = useRef(null);
-  const [isHoveringBadge, setIsHoveringBadge] = useState(false);
+  const badgeHitBoxesRef = useRef([]);
+  const [hoveredBadgePattern, setHoveredBadgePattern] = useState(null);
 
   // 統一採用傳入或分析得出之中文股票名稱
   const effectiveStockName = propStockName || stockData?.stockName || stockData?.symbol || '台股標的';
@@ -38,6 +39,30 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
     return stockData.historicalData;
   }, [stockData]);
 
+  // 全歷史 K 棒形態極速掃描 (毫秒級計算)
+  const historicalPatternMatches = useMemo(() => {
+    if (!historicalData || historicalData.length === 0) return [];
+    return detectHistoricalPatterns(historicalData);
+  }, [historicalData]);
+
+  // 依據 K 棒索引快速查詢形態
+  const patternByIndex = useMemo(() => {
+    const map = new Map();
+    historicalPatternMatches.forEach(p => map.set(p.index, p));
+    return map;
+  }, [historicalPatternMatches]);
+
+  // 擷取 AI 關鍵價位 (天花板 / 地板 / 防守線)
+  const primaryResistance = prediction?.resistanceLevels?.[0];
+  const primarySupport = prediction?.supportLevels?.[0];
+  const stopLoss = prediction?.orderBooking?.stopLossLimit;
+
+  // 取得最新一根 K 棒的形態
+  const latestPattern = detectedPatterns?.[0] || (historicalPatternMatches.length > 0 ? historicalPatternMatches[historicalPatternMatches.length - 1] : null);
+
+  // 手機裝置偵測與響應式高度
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640);
+
   const activeIndex = hoverIndex !== null && hoverIndex >= 0 && hoverIndex < historicalData.length
     ? hoverIndex
     : (historicalData.length > 0 ? historicalData.length - 1 : null);
@@ -49,6 +74,10 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
   const priceChange = currentItem && prevItem ? Number((currentItem.close - prevItem.close).toFixed(2)) : 0;
   const changePercent = prevItem && prevItem.close ? Number(((priceChange / prevItem.close) * 100).toFixed(2)) : 0;
 
+  // 當前 Hover 的 K 棒是否具有形態訊號
+  const hoveredCandlePattern = activeIndex !== null ? patternByIndex.get(activeIndex) : null;
+  const activeHoverPattern = hoveredBadgePattern || hoveredCandlePattern;
+
   // 繪製 Canvas 圖表
   const renderChart = () => {
     const canvas = canvasRef.current;
@@ -58,7 +87,8 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
     const dpr = window.devicePixelRatio || 2;
 
     const displayWidth = canvas.clientWidth || 800;
-    const displayHeight = 480;
+    const mobileMode = displayWidth < 640;
+    const displayHeight = mobileMode ? 380 : 480;
 
     canvas.width = displayWidth * dpr;
     canvas.height = displayHeight * dpr;
@@ -72,13 +102,13 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
     ctx.fillRect(0, 0, width, height);
 
     // 版面劃分
-    const paddingLeft = 10;
-    const paddingRight = 60; // 留給 Y 軸價格與量能數值
+    const paddingLeft = 8;
+    const paddingRight = mobileMode ? 50 : 60; // 留給 Y 軸價格與量能數值
     const topChartTop = 15;
-    const topChartHeight = 280;
-    const midGap = 35; // 成交量標題列空間
+    const topChartHeight = mobileMode ? 220 : 280;
+    const midGap = mobileMode ? 28 : 35; // 成交量標題列空間
     const bottomChartTop = topChartTop + topChartHeight + midGap;
-    const bottomChartHeight = 110;
+    const bottomChartHeight = mobileMode ? 85 : 110;
     const chartWidth = width - paddingLeft - paddingRight;
 
     // 1. 繪製股票中文標題、代碼與價格行情 (確保產生的圖片清楚包含中文股名)
@@ -366,85 +396,187 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
     // 10. 籌碼 K 線 App 標註圖層 (Chip-K Annotations Overlay)
     if (showChipAnnotations) {
       ctx.save();
+      badgeHitBoxesRef.current = [];
 
-      // (A) 繪製 AI 預測之天花板壓力線 (紅虛線)
-      if (prediction && prediction.resistanceLevels && prediction.resistanceLevels.length > 0) {
-        const primaryResistance = prediction.resistanceLevels[0];
-        if (primaryResistance >= chartMinPrice && primaryResistance <= chartMaxPrice) {
-          const resY = getY(primaryResistance);
+      // (A) 繪製 AI 預測之天花板壓力線 (紅虛線) + 右側價格軸標籤
+      if (primaryResistance && primaryResistance >= chartMinPrice && primaryResistance <= chartMaxPrice) {
+        const resY = getY(primaryResistance);
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 1.5;
+        ctx.moveTo(paddingLeft, resY);
+        ctx.lineTo(width - paddingRight, resY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 右側價格軸標籤 (TradingView 樣式紅膠囊，不遮擋左側文字與走勢)
+        const tagW = paddingRight - 6;
+        const tagH = 16;
+        const tagX = width - paddingRight + 3;
+        const tagY = resY - tagH / 2;
+        ctx.fillStyle = '#ef4444';
+        if (ctx.roundRect) {
           ctx.beginPath();
-          ctx.setLineDash([4, 4]);
-          ctx.strokeStyle = '#ef4444';
+          ctx.roundRect(tagX, tagY, tagW, tagH, 3);
+          ctx.fill();
+        } else {
+          ctx.fillRect(tagX, tagY, tagW, tagH);
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${primaryResistance}`, tagX + tagW / 2, resY + 3.5);
+      }
+
+      // (B) 繪製 AI 預測之地板支撐線 (綠虛線) + 右側價格軸標籤
+      if (primarySupport && primarySupport >= chartMinPrice && primarySupport <= chartMaxPrice) {
+        const supY = getY(primarySupport);
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 1.5;
+        ctx.moveTo(paddingLeft, supY);
+        ctx.lineTo(width - paddingRight, supY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 右側價格軸標籤 (TradingView 樣式綠膠囊)
+        const tagW = paddingRight - 6;
+        const tagH = 16;
+        const tagX = width - paddingRight + 3;
+        const tagY = supY - tagH / 2;
+        ctx.fillStyle = '#10b981';
+        if (ctx.roundRect) {
+          ctx.beginPath();
+          ctx.roundRect(tagX, tagY, tagW, tagH, 3);
+          ctx.fill();
+        } else {
+          ctx.fillRect(tagX, tagY, tagW, tagH);
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${primarySupport}`, tagX + tagW / 2, supY + 3.5);
+      }
+
+      // (C) 繪製防守停損點 (Invalidation Level) + 右側價格軸標籤
+      if (stopLoss && stopLoss >= chartMinPrice && stopLoss <= chartMaxPrice) {
+        const slY = getY(stopLoss);
+        ctx.beginPath();
+        ctx.setLineDash([2, 3]);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 1.2;
+        ctx.moveTo(paddingLeft, slY);
+        ctx.lineTo(width - paddingRight, slY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 右側價格軸標籤 (TradingView 樣式橘膠囊)
+        const tagW = paddingRight - 6;
+        const tagH = 16;
+        const tagX = width - paddingRight + 3;
+        const tagY = slY - tagH / 2;
+        ctx.fillStyle = '#f59e0b';
+        if (ctx.roundRect) {
+          ctx.beginPath();
+          ctx.roundRect(tagX, tagY, tagW, tagH, 3);
+          ctx.fill();
+        } else {
+          ctx.fillRect(tagX, tagY, tagW, tagH);
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${stopLoss}`, tagX + tagW / 2, slY + 3.5);
+      }
+
+      // (D) 歷史 K 棒形態微型標記 (Historical Pattern Badges)
+      const lastBarIdx = historicalData.length - 1;
+      historicalPatternMatches.forEach((pMatch) => {
+        if (pMatch.index >= lastBarIdx) return; // 最新一根在 (E) 處繪製醒目主氣泡
+
+        const px = getX(pMatch.index);
+        const candle = pMatch.candle;
+        const isBull = pMatch.sentiment === 'bullish';
+        const markerColor = isBull ? '#ef4444' : '#10b981';
+        
+        // 標記在 K 棒上方(空頭)或下方(多頭)
+        const py = isBull
+          ? getY(candle.low) + 13
+          : getY(candle.high) - 13;
+
+        const isHovered = hoverIndex === pMatch.index || (hoveredBadgePattern && hoveredBadgePattern.index === pMatch.index);
+
+        // 記錄 HitBox 供滑鼠點擊與懸浮
+        badgeHitBoxesRef.current.push({
+          x: px - 12,
+          y: py - 10,
+          width: 24,
+          height: 20,
+          pattern: pMatch,
+          index: pMatch.index
+        });
+
+        // 繪製形態標記
+        ctx.save();
+        if (isHovered) {
+          ctx.beginPath();
+          ctx.arc(px, py, 8, 0, Math.PI * 2);
+          ctx.fillStyle = isBull ? 'rgba(239, 68, 68, 0.25)' : 'rgba(16, 185, 129, 0.25)';
+          ctx.fill();
+          ctx.strokeStyle = markerColor;
           ctx.lineWidth = 1.5;
-          ctx.moveTo(paddingLeft, resY);
-          ctx.lineTo(width - paddingRight, resY);
           ctx.stroke();
-          ctx.setLineDash([]);
+        }
 
-          // 壓力標籤氣泡
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
-          ctx.fillRect(paddingLeft + 10, resY - 18, 125, 18);
+        // 小圓圈節點
+        ctx.beginPath();
+        ctx.arc(px, py, isHovered ? 5.5 : 4, 0, Math.PI * 2);
+        ctx.fillStyle = markerColor;
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        // 懸浮時浮現精緻形態氣泡
+        if (isHovered) {
+          ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+          const tipText = `🔥 ${pMatch.name}`;
+          const tipWidth = ctx.measureText(tipText).width + 12;
+          const tipH = 18;
+          const tipX = Math.max(paddingLeft, Math.min(px - tipWidth / 2, width - paddingRight - tipWidth));
+          const tipY = isBull ? py + 10 : py - 22;
+
+          ctx.fillStyle = '#0f172a';
+          if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(tipX, tipY, tipWidth, tipH, 4);
+            ctx.fill();
+          } else {
+            ctx.fillRect(tipX, tipY, tipWidth, tipH);
+          }
+          ctx.strokeStyle = markerColor;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
           ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-          ctx.textAlign = 'left';
-          ctx.fillText(`🚩 壓力天花板: ${primaryResistance}`, paddingLeft + 16, resY - 5);
+          ctx.textAlign = 'center';
+          ctx.fillText(tipText, tipX + tipWidth / 2, tipY + 12.5);
         }
-      }
 
-      // (B) 繪製 AI 預測之地板支撐線 (綠虛線)
-      if (prediction && prediction.supportLevels && prediction.supportLevels.length > 0) {
-        const primarySupport = prediction.supportLevels[0];
-        if (primarySupport >= chartMinPrice && primarySupport <= chartMaxPrice) {
-          const supY = getY(primarySupport);
-          ctx.beginPath();
-          ctx.setLineDash([4, 4]);
-          ctx.strokeStyle = '#10b981';
-          ctx.lineWidth = 1.5;
-          ctx.moveTo(paddingLeft, supY);
-          ctx.lineTo(width - paddingRight, supY);
-          ctx.stroke();
-          ctx.setLineDash([]);
+        ctx.restore();
+      });
 
-          // 支撐標籤氣泡
-          ctx.fillStyle = 'rgba(16, 185, 129, 0.9)';
-          ctx.fillRect(paddingLeft + 10, supY + 2, 125, 18);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-          ctx.textAlign = 'left';
-          ctx.fillText(`🛡️ 支撐地板: ${primarySupport}`, paddingLeft + 16, supY + 15);
-        }
-      }
-
-      // (C) 繪製防守停損點 (Invalidation Level)
-      if (prediction && prediction.orderBooking && prediction.orderBooking.stopLossLimit) {
-        const stopLoss = prediction.orderBooking.stopLossLimit;
-        if (stopLoss >= chartMinPrice && stopLoss <= chartMaxPrice) {
-          const slY = getY(stopLoss);
-          ctx.beginPath();
-          ctx.setLineDash([2, 3]);
-          ctx.strokeStyle = '#f59e0b';
-          ctx.lineWidth = 1.2;
-          ctx.moveTo(paddingLeft, slY);
-          ctx.lineTo(width - paddingRight, slY);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          ctx.fillStyle = '#d97706';
-          ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-          ctx.textAlign = 'right';
-          ctx.fillText(`⚠️ 關鍵防守線: ${stopLoss}`, width - paddingRight - 8, slY - 4);
-        }
-      }
-
-      // (D) 最新 K 棒形態辨識標籤氣泡 (籌碼 K 線樣式，支援點擊彈出百科)
-      if (showChipAnnotations && detectedPatterns && detectedPatterns.length > 0 && historicalData.length > 0) {
-        const latestIdx = historicalData.length - 1;
+      // (E) 最新 K 棒形態辨識標籤氣泡 (主氣泡，支援點擊彈出百科)
+      if (detectedPatterns && detectedPatterns.length > 0 && historicalData.length > 0) {
+        const latestIdx = lastBarIdx;
         const lx = getX(latestIdx);
         const latestCandle = historicalData[latestIdx];
         const ly = getY(latestCandle.high);
 
         const patternName = detectedPatterns[0].name || '形態訊號';
-        const tagText = onPatternClick ? `🔥 ${patternName} 👆點擊詳解` : `🔥 ${patternName}`;
+        const tagText = `🔥 ${patternName}`;
         
         ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
         const textWidth = ctx.measureText(tagText).width;
@@ -453,17 +585,20 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
         const boxX = Math.max(paddingLeft, Math.min(lx - boxWidth / 2, width - paddingRight - boxWidth));
         const boxY = Math.max(topChartTop + 5, ly - 30);
 
-        // 記錄氣泡感應區域供滑鼠點擊與懸浮使用
-        badgeHitBoxRef.current = {
+        const isHovered = hoveredBadgePattern?.index === latestIdx;
+
+        // 記錄氣泡感應區域
+        badgeHitBoxesRef.current.push({
           x: boxX,
           y: boxY,
           width: boxWidth,
           height: boxHeight,
-          pattern: detectedPatterns[0]
-        };
+          pattern: detectedPatterns[0],
+          index: latestIdx
+        });
 
-        // 氣泡底色 (相容性安全繪製)
-        ctx.fillStyle = isHoveringBadge ? '#0f172a' : '#1e293b';
+        // 氣泡底色
+        ctx.fillStyle = isHovered ? '#0f172a' : '#1e293b';
         ctx.beginPath();
         if (ctx.roundRect) {
           ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 4);
@@ -471,23 +606,21 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
           ctx.rect(boxX, boxY, boxWidth, boxHeight);
         }
         ctx.fill();
-        ctx.strokeStyle = isHoveringBadge ? '#38bdf8' : '#0284c7';
-        ctx.lineWidth = isHoveringBadge ? 2 : 1;
+        ctx.strokeStyle = isHovered ? '#38bdf8' : '#0284c7';
+        ctx.lineWidth = isHovered ? 2 : 1;
         ctx.stroke();
 
         // 氣泡文字
-        ctx.fillStyle = isHoveringBadge ? '#7dd3fc' : '#38bdf8';
+        ctx.fillStyle = isHovered ? '#7dd3fc' : '#38bdf8';
         ctx.textAlign = 'left';
         ctx.fillText(tagText, boxX + 8, boxY + 15);
 
         // 箭頭指示線
-        ctx.strokeStyle = isHoveringBadge ? '#7dd3fc' : '#38bdf8';
+        ctx.strokeStyle = isHovered ? '#7dd3fc' : '#38bdf8';
         ctx.beginPath();
         ctx.moveTo(lx, boxY + boxHeight);
         ctx.lineTo(lx, ly - 2);
         ctx.stroke();
-      } else {
-        badgeHitBoxRef.current = null;
       }
 
       ctx.restore();
@@ -520,14 +653,51 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
     }
   };
 
-  // 監聽重繪
+  // 監聽重繪與視窗縮放
   useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 640);
+      renderChart();
+    };
     renderChart();
-    const handleResize = () => renderChart();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historicalData, effectiveStockName, maVisible, showChipAnnotations, hoverIndex, prediction, detectedPatterns, isHoveringBadge]);
+  }, [historicalData, effectiveStockName, maVisible, showChipAnnotations, hoverIndex, prediction, detectedPatterns, hoveredBadgePattern, historicalPatternMatches, isMobile]);
+
+  // 手機觸控支援：在 K 線圖上滑動手指進行查價與歷史形態辨識
+  const handleTouchMove = (e) => {
+    if (!e.touches || e.touches.length === 0) return;
+    const touch = e.touches[0];
+    const canvas = canvasRef.current;
+    if (!canvas || historicalData.length === 0) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const clientX = touch.clientX - rect.left;
+
+    const paddingLeft = 8;
+    const paddingRight = canvas.clientWidth < 640 ? 50 : 60;
+    const chartWidth = canvas.clientWidth - paddingLeft - paddingRight;
+
+    if (clientX >= paddingLeft && clientX <= canvas.clientWidth - paddingRight) {
+      const count = historicalData.length;
+      const stepX = chartWidth / count;
+      const rawIdx = Math.floor((clientX - paddingLeft) / stepX);
+      const clampedIdx = Math.max(0, Math.min(count - 1, rawIdx));
+      setHoverIndex(clampedIdx);
+    }
+  };
+
+  const handleTouchStart = (e) => {
+    handleTouchMove(e);
+  };
+
+  const handleTouchEnd = () => {
+    // 手機放開手指後保留 4 秒，讓使用者有充裕時間點擊頂部百科或看清數值
+    setTimeout(() => {
+      setHoverIndex(null);
+    }, 4000);
+  };
 
   // 滑鼠互動：計算游標所在 K 棒索引與氣泡懸浮偵測
   const handleMouseMove = (e) => {
@@ -538,18 +708,25 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
     const clientX = e.clientX - rect.left;
     const clientY = e.clientY - rect.top;
 
-    // 檢查是否懸浮在型態標籤氣泡上
-    if (badgeHitBoxRef.current && showChipAnnotations) {
-      const { x, y, width, height } = badgeHitBoxRef.current;
-      if (clientX >= x - 2 && clientX <= x + width + 2 && clientY >= y - 2 && clientY <= y + height + 2) {
-        canvas.style.cursor = 'pointer';
-        if (!isHoveringBadge) setIsHoveringBadge(true);
-      } else {
-        canvas.style.cursor = 'crosshair';
-        if (isHoveringBadge) setIsHoveringBadge(false);
+    // 檢查是否懸浮在任一形態標籤或歷史節點上
+    let hoveredHit = null;
+    if (showChipAnnotations && badgeHitBoxesRef.current.length > 0) {
+      hoveredHit = badgeHitBoxesRef.current.find(b =>
+        clientX >= b.x - 3 && clientX <= b.x + b.width + 3 &&
+        clientY >= b.y - 3 && clientY <= b.y + b.height + 3
+      );
+    }
+
+    if (hoveredHit) {
+      canvas.style.cursor = 'pointer';
+      if (hoveredBadgePattern?.index !== hoveredHit.pattern.index) {
+        setHoveredBadgePattern(hoveredHit.pattern);
       }
     } else {
       canvas.style.cursor = 'crosshair';
+      if (hoveredBadgePattern !== null) {
+        setHoveredBadgePattern(null);
+      }
     }
 
     const paddingLeft = 10;
@@ -570,12 +747,12 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
 
   const handleMouseLeave = () => {
     setHoverIndex(null);
-    if (isHoveringBadge) setIsHoveringBadge(false);
+    setHoveredBadgePattern(null);
   };
 
   // 點擊 Canvas 上的形態氣泡觸發 Modal
   const handleCanvasClick = (e) => {
-    if (!badgeHitBoxRef.current || !onPatternClick || !showChipAnnotations) return;
+    if (!showChipAnnotations || !onPatternClick) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -583,31 +760,36 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
     const clientX = e.clientX - rect.left;
     const clientY = e.clientY - rect.top;
 
-    const { x, y, width, height, pattern } = badgeHitBoxRef.current;
-    if (clientX >= x - 6 && clientX <= x + width + 6 && clientY >= y - 6 && clientY <= y + height + 6) {
-      // 搜尋百科完整資料庫
-      let matched = KLINE_PATTERNS.find(p => 
-        p.id === pattern?.patternId || 
-        (pattern?.name && p.name && (pattern.name.toLowerCase().includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(pattern.name.toLowerCase()))) ||
-        (pattern?.name && p.chineseName && (pattern.name.includes(p.chineseName) || p.chineseName.includes(pattern.name))) ||
-        (pattern?.description && (pattern.description.includes(p.name.split(' ')[0]) || pattern.description.includes(p.chineseName.split(' ')[0])))
-      );
+    const clickedBadge = badgeHitBoxesRef.current.find(b =>
+      clientX >= b.x - 5 && clientX <= b.x + b.width + 5 &&
+      clientY >= b.y - 5 && clientY <= b.y + b.height + 5
+    );
 
-      if (!matched && pattern) {
-        matched = {
-          name: pattern.name,
-          chineseName: pattern.name,
-          summary: pattern.description || '由 AI 視覺辨識根據最新走勢特徵判定之形態。',
-          marketPsychology: '最新 K 棒呈現多空雙方激烈博弈，請密切留意明日開盤強弱訊號。',
-          sentiment: 'bullish',
-          winRate: pattern.confidence || 80,
-          tradingRules: ['跌破當前關鍵防守線或前日低點請嚴格執行停損。', '若放量突破上方壓力天花板可順勢偏多應對。']
-        };
-      }
+    const targetPattern = clickedBadge?.pattern || (hoverIndex !== null ? patternByIndex.get(hoverIndex) : null);
+    if (!targetPattern) return;
 
-      if (matched) {
-        onPatternClick(matched);
-      }
+    // 搜尋百科完整資料庫
+    let matched = KLINE_PATTERNS.find(p => 
+      p.id === targetPattern?.patternId || 
+      (targetPattern?.name && p.name && (targetPattern.name.toLowerCase().includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(targetPattern.name.toLowerCase()))) ||
+      (targetPattern?.name && p.chineseName && (targetPattern.name.includes(p.chineseName) || p.chineseName.includes(targetPattern.name))) ||
+      (targetPattern?.description && (targetPattern.description.includes(p.name.split(' ')[0]) || targetPattern.description.includes(p.chineseName.split(' ')[0])))
+    );
+
+    if (!matched && targetPattern) {
+      matched = {
+        name: targetPattern.name,
+        chineseName: targetPattern.name,
+        summary: targetPattern.description || '由技術指標與走勢特徵判定之形態。',
+        marketPsychology: 'K 棒呈現多空激烈博弈，請密切留意關鍵支撐與壓力位。',
+        sentiment: targetPattern.sentiment || 'bullish',
+        winRate: targetPattern.confidence || 80,
+        tradingRules: ['跌破當前關鍵防守線或前日低點請嚴格執行停損。', '若放量突破上方壓力天花板可順勢偏多應對。']
+      };
+    }
+
+    if (matched) {
+      onPatternClick(matched);
     }
   };
 
@@ -775,7 +957,116 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
 
       </div>
 
-      {/* Canvas 畫布容器 */}
+      {/* 頂部 AI 關鍵位與形態戰法百科按鈕列 */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '10px',
+        flexWrap: 'wrap',
+        marginBottom: '10px',
+        padding: '8px 12px',
+        borderRadius: '8px',
+        background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+        border: '1px solid #e2e8f0',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)'
+      }}>
+        {/* 左側：AI 關鍵價位 (天花板 / 地板 / 防守線) */}
+        {showChipAnnotations && (primaryResistance || primarySupport || stopLoss) ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: '700', color: '#475569', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              🎯 AI 關鍵位：
+            </span>
+            {primaryResistance && (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                color: '#dc2626',
+                fontWeight: '700',
+                fontSize: '0.8rem'
+              }}>
+                🔴 壓力 <strong style={{ fontSize: '0.85rem' }}>{primaryResistance}</strong>
+              </span>
+            )}
+            {primarySupport && (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: '#ecfdf5',
+                border: '1px solid #a7f3d0',
+                color: '#059669',
+                fontWeight: '700',
+                fontSize: '0.8rem'
+              }}>
+                🟢 支撐 <strong style={{ fontSize: '0.85rem' }}>{primarySupport}</strong>
+              </span>
+            )}
+            {stopLoss && (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: '#fffbeb',
+                border: '1px solid #fde68a',
+                color: '#d97706',
+                fontWeight: '700',
+                fontSize: '0.8rem'
+              }}>
+                ⚠️ 防守 <strong style={{ fontSize: '0.85rem' }}>{stopLoss}</strong>
+              </span>
+            )}
+          </div>
+        ) : <div />}
+
+        {/* 右側：【形態戰法 點擊詳解】按鈕（永久固定在上方，絕不滑過就消失，手機極致友善！） */}
+        {(activeHoverPattern || latestPattern) && (
+          <button
+            type="button"
+            onClick={() => onPatternClick && onPatternClick(activeHoverPattern || latestPattern)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              borderRadius: '6px',
+              background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+              border: '1px solid #38bdf8',
+              color: '#38bdf8',
+              fontWeight: '700',
+              fontSize: '0.82rem',
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(2, 132, 199, 0.18)',
+              transition: 'all 0.15s ease',
+              minHeight: '34px'
+            }}
+            title="點擊查看形態戰法、主力心理與實戰回測教學"
+          >
+            <span>🔥 {activeHoverPattern ? `${activeHoverPattern.date ? activeHoverPattern.date + ' ' : ''}${activeHoverPattern.name}` : latestPattern?.name || '形態戰法'}</span>
+            <span style={{
+              fontSize: '0.72rem',
+              background: '#0284c7',
+              color: '#ffffff',
+              padding: '2px 7px',
+              borderRadius: '4px',
+              fontWeight: '600'
+            }}>
+              📖 點擊查看百科詳解
+            </span>
+          </button>
+        )}
+      </div>
+
+      {/* Canvas 畫布容器 (支援桌面滑鼠與手機觸控滑動) */}
       <div
         ref={containerRef}
         style={{
@@ -784,28 +1075,32 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
           overflow: 'hidden',
           borderRadius: '4px',
           background: '#ffffff',
-          cursor: isHoveringBadge ? 'pointer' : 'crosshair'
+          cursor: hoveredBadgePattern ? 'pointer' : 'crosshair',
+          touchAction: 'none'
         }}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
         onClick={handleCanvasClick}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
       >
         <canvas
           ref={canvasRef}
-          style={{ width: '100%', height: '480px', display: 'block' }}
+          style={{ width: '100%', height: `${isMobile ? 380 : 480}px`, display: 'block' }}
         />
       </div>
 
       {/* 副圖成交量資訊列 */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem', color: '#64748b', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #f8fafc' }}>
-        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem', color: '#64748b', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #f8fafc', flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ fontWeight: '600', color: '#1e293b' }}>指標：成交量</span>
           <span>量(張) <strong style={{ color: priceColor }}>{currentItem?.volumeLots?.toLocaleString()}</strong></span>
           <span style={{ color: '#2563eb' }}>MV5 <strong>{currentItem?.mv5 ?? '-'}</strong></span>
           <span style={{ color: '#f97316' }}>MV20 <strong>{currentItem?.mv20 ?? '-'}</strong></span>
         </div>
         <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-          滑鼠移動至圖表可啟動十字游標查價
+          {isMobile ? '👆 手指在圖表上滑動可查價與辨識歷史形態' : '滑鼠移動至圖表可啟動十字游標查價與歷史形態辨識'}
         </div>
       </div>
 

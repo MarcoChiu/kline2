@@ -70,21 +70,6 @@ export default function Header({ activeTab, setActiveTab, hasApiKey, onOpenApiKe
         {/* API Key & Cloudflare Proxy Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <button
-            onClick={onOpenProxyModal || onOpenApiKeyModal}
-            className="btn-secondary"
-            style={{
-              fontSize: '0.8rem',
-              padding: '6px 12px',
-              borderColor: hasCustomProxy ? 'rgba(16, 185, 129, 0.4)' : undefined,
-              background: hasCustomProxy ? 'rgba(16, 185, 129, 0.08)' : undefined
-            }}
-            title="配置專屬 Cloudflare Worker 代理以獲取美股與國際指數（解決 403 跨網域問題）"
-          >
-            <Globe size={14} color={hasCustomProxy ? '#10b981' : '#60a5fa'} />
-            <span>{hasCustomProxy ? 'Worker 代理已啟用' : '配置 Cloudflare 代理'}</span>
-          </button>
-
-          <button
             onClick={onOpenApiKeyModal}
             className="btn-secondary"
             style={{
@@ -97,6 +82,21 @@ export default function Header({ activeTab, setActiveTab, hasApiKey, onOpenApiKe
           >
             <Key size={14} color={hasApiKey ? '#10b981' : '#f59e0b'} />
             <span>{hasApiKey ? 'Gemini 已啟用' : '配置 Gemini Key'}</span>
+          </button>
+
+          <button
+            onClick={onOpenProxyModal || onOpenApiKeyModal}
+            className="btn-secondary"
+            style={{
+              fontSize: '0.8rem',
+              padding: '6px 12px',
+              borderColor: hasCustomProxy ? 'rgba(16, 185, 129, 0.4)' : undefined,
+              background: hasCustomProxy ? 'rgba(16, 185, 129, 0.08)' : undefined
+            }}
+            title="配置專屬 Cloudflare Worker 代理以獲取美股與國際指數（解決 403 跨網域問題）"
+          >
+            <Globe size={14} color={hasCustomProxy ? '#10b981' : '#60a5fa'} />
+            <span>{hasCustomProxy ? 'Worker 代理已啟用' : '配置 Cloudflare 代理'}</span>
           </button>
         </div>
 
