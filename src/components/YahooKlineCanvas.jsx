@@ -74,9 +74,16 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
   const priceChange = currentItem && prevItem ? Number((currentItem.close - prevItem.close).toFixed(2)) : 0;
   const changePercent = prevItem && prevItem.close ? Number(((priceChange / prevItem.close) * 100).toFixed(2)) : 0;
 
-  // 當前 Hover 的 K 棒是否具有形態訊號
-  const hoveredCandlePattern = activeIndex !== null ? patternByIndex.get(activeIndex) : null;
-  const activeHoverPattern = hoveredBadgePattern || hoveredCandlePattern;
+  // 當前 Hover 的 K 棒是否具有形態訊號 (僅針對過去歷史天數)
+  const isHoveringPastCandle = hoverIndex !== null && hoverIndex < historicalData.length - 1;
+  const hoveredPastPattern = isHoveringPastCandle ? patternByIndex.get(hoverIndex) : null;
+  const displayPattern = hoveredPastPattern || latestPattern;
+
+  // 統一保證形態必有對應交易日期 (最新日與歷史日 100% 都有日期)
+  const effectiveLatestDate = currentItem?.date || stockData?.latest?.date || (historicalData.length > 0 ? historicalData[historicalData.length - 1]?.date : '');
+  const patternDate = isHoveringPastCandle
+    ? (displayPattern?.date || (hoverIndex !== null && historicalData[hoverIndex]?.date) || '')
+    : (displayPattern?.date || effectiveLatestDate);
 
   // 繪製 Canvas 圖表
   const renderChart = () => {
@@ -568,61 +575,6 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
         ctx.restore();
       });
 
-      // (E) 最新 K 棒形態辨識標籤氣泡 (主氣泡，支援點擊彈出百科)
-      if (detectedPatterns && detectedPatterns.length > 0 && historicalData.length > 0) {
-        const latestIdx = lastBarIdx;
-        const lx = getX(latestIdx);
-        const latestCandle = historicalData[latestIdx];
-        const ly = getY(latestCandle.high);
-
-        const patternName = detectedPatterns[0].name || '形態訊號';
-        const tagText = `🔥 ${patternName}`;
-        
-        ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-        const textWidth = ctx.measureText(tagText).width;
-        const boxWidth = textWidth + 16;
-        const boxHeight = 22;
-        const boxX = Math.max(paddingLeft, Math.min(lx - boxWidth / 2, width - paddingRight - boxWidth));
-        const boxY = Math.max(topChartTop + 5, ly - 30);
-
-        const isHovered = hoveredBadgePattern?.index === latestIdx;
-
-        // 記錄氣泡感應區域
-        badgeHitBoxesRef.current.push({
-          x: boxX,
-          y: boxY,
-          width: boxWidth,
-          height: boxHeight,
-          pattern: detectedPatterns[0],
-          index: latestIdx
-        });
-
-        // 氣泡底色
-        ctx.fillStyle = isHovered ? '#0f172a' : '#1e293b';
-        ctx.beginPath();
-        if (ctx.roundRect) {
-          ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 4);
-        } else {
-          ctx.rect(boxX, boxY, boxWidth, boxHeight);
-        }
-        ctx.fill();
-        ctx.strokeStyle = isHovered ? '#38bdf8' : '#0284c7';
-        ctx.lineWidth = isHovered ? 2 : 1;
-        ctx.stroke();
-
-        // 氣泡文字
-        ctx.fillStyle = isHovered ? '#7dd3fc' : '#38bdf8';
-        ctx.textAlign = 'left';
-        ctx.fillText(tagText, boxX + 8, boxY + 15);
-
-        // 箭頭指示線
-        ctx.strokeStyle = isHovered ? '#7dd3fc' : '#38bdf8';
-        ctx.beginPath();
-        ctx.moveTo(lx, boxY + boxHeight);
-        ctx.lineTo(lx, ly - 2);
-        ctx.stroke();
-      }
-
       ctx.restore();
     }
 
@@ -1028,11 +980,11 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
           </div>
         ) : <div />}
 
-        {/* 右側：【形態戰法 點擊詳解】按鈕（永久固定在上方，絕不滑過就消失，手機極致友善！） */}
-        {(activeHoverPattern || latestPattern) && (
+        {/* 右側：【形態戰法 點擊詳解】按鈕（永久固定在上方，圖層內不再有遮擋黑框，手機極致友善！） */}
+        {displayPattern && (
           <button
             type="button"
-            onClick={() => onPatternClick && onPatternClick(activeHoverPattern || latestPattern)}
+            onClick={() => onPatternClick && onPatternClick(displayPattern)}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -1051,7 +1003,7 @@ export default function YahooKlineCanvas({ stockData, stockName: propStockName, 
             }}
             title="點擊查看形態戰法、主力心理與實戰回測教學"
           >
-            <span>🔥 {activeHoverPattern ? `${activeHoverPattern.date ? activeHoverPattern.date + ' ' : ''}${activeHoverPattern.name}` : latestPattern?.name || '形態戰法'}</span>
+            <span>🔥 {isHoveringPastCandle && displayPattern.date ? `${displayPattern.date} ` : ''}{displayPattern.name}</span>
             <span style={{
               fontSize: '0.72rem',
               background: '#0284c7',
