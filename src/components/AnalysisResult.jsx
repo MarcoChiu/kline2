@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { TrendingUp, TrendingDown, Minus, Target, ShieldAlert, Cpu, Award, Zap, Compass, X, Shield, Globe, BookmarkCheck, History, Sparkles } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Target, ShieldAlert, Cpu, Award, Zap, Compass, X, Shield, Globe, BookmarkCheck, History, Sparkles, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { KLINE_PATTERNS } from '../data/klinePatterns';
 import { PatternSVG } from './PatternEncyclopedia';
 import YahooKlineCanvas from './YahooKlineCanvas';
@@ -21,6 +21,12 @@ export default function AnalysisResult({ result, isAnalyzing, onOpenApiKeyModal 
 
     if (timeNum >= 0 && timeNum < 830) {
       return {
+        sessionType: 'pre_market_today',
+        timeLabel: '今日早鳥',
+        bookingTitle: '今日開盤早鳥預約掛單建議',
+        bookingSubtitle: '00:00 ~ 08:30 開盤前早鳥時段，可預先於券商 App 掛上預約單／限價單',
+        forecastTitle: '今日開盤多空概率 & 情境推演',
+        badgeColor: '#818cf8',
         isToday: true
       };
     } else if (timeNum >= 830 && timeNum < 900) {
@@ -385,100 +391,221 @@ export default function AnalysisResult({ result, isAnalyzing, onOpenApiKeyModal 
             </div>
           </div>
 
-          {/* 結論標籤 */}
-          {prediction.actionDecision && (
-            <div style={{
-              padding: '6px 16px',
-              borderRadius: '8px',
-              fontWeight: '900',
-              fontSize: '1.1rem',
-              color: '#fff',
-              background: prediction.actionDecision.includes('買') ? '#10b981' : prediction.actionDecision.includes('賣') ? '#ef4444' : '#f59e0b',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}>
-              <span>綜合策略：</span>
-              <span>{prediction.actionDecision}</span>
-            </div>
-          )}
+          {/* 新手策略決策結論標籤 */}
+          {(() => {
+            const rawDecision = prediction.actionDecision || '';
+            const bullProb = prediction.bullishProbability ?? 50;
+            const bearProb = prediction.bearishProbability ?? 30;
+
+            let badgeText = '觀望等待';
+            let badgeBg = '#f59e0b';
+            if (rawDecision.includes('買') || (!rawDecision.includes('賣') && !rawDecision.includes('觀望') && bullProb >= 55)) {
+              badgeText = '可以買進';
+              badgeBg = '#10b981';
+            } else if (rawDecision.includes('賣') || (!rawDecision.includes('買') && !rawDecision.includes('觀望') && bearProb >= 55)) {
+              badgeText = '建議賣出';
+              badgeBg = '#ef4444';
+            }
+
+            return (
+              <div style={{
+                padding: '6px 16px',
+                borderRadius: '8px',
+                fontWeight: '900',
+                fontSize: '1.05rem',
+                color: '#fff',
+                background: badgeBg,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}>
+                <span style={{ fontSize: '0.82rem', opacity: 0.9 }}>新手決策：</span>
+                <span>{badgeText}</span>
+              </div>
+            );
+          })()}
         </div>
 
-        {/* 預約單三價位矩陣 */}
+        {/* 新手極簡操作指引與掛單價位矩陣 */}
         {(() => {
           const booking = prediction.orderBooking || {};
           const buyPrice = booking.buyLimit || prediction.supportLevels?.[0] || movingAverages?.ma5 || (displayPrice ? (displayPrice * 0.985).toFixed(2) : '--');
           const takeProfitPrice = booking.takeProfitLimit || prediction.resistanceLevels?.[0] || (displayPrice ? (displayPrice * 1.035).toFixed(2) : '--');
           const stopLossPrice = booking.stopLossLimit || prediction.supportLevels?.[1] || movingAverages?.ma20 || (displayPrice ? (displayPrice * 0.95).toFixed(2) : '--');
 
+          const rawDecision = prediction.actionDecision || '';
+          const bullProb = prediction.bullishProbability ?? 50;
+          const bearProb = prediction.bearishProbability ?? 30;
+
+          let actionType = 'wait';
+          if (rawDecision.includes('買') || (!rawDecision.includes('賣') && !rawDecision.includes('觀望') && bullProb >= 55)) {
+            actionType = 'buy';
+          } else if (rawDecision.includes('賣') || (!rawDecision.includes('買') && !rawDecision.includes('觀望') && bearProb >= 55)) {
+            actionType = 'sell';
+          }
+
+          const actionConfig = {
+            buy: {
+              badge: '🟢 可以買進',
+              actionTitle: '逢低承接 · 偏多佈局',
+              themeColor: '#10b981',
+              bgColor: 'rgba(16, 185, 129, 0.1)',
+              borderColor: 'rgba(16, 185, 129, 0.35)',
+              emptyHand: `空手者可在回測支撐 ${buyPrice} 元附近分批掛單低接，切勿急躁追高追價。`,
+              holding: `手中持股只要收盤未跌破防守價 ${stopLossPrice} 元可續抱；若衝高至 ${takeProfitPrice} 元逢高分批獲利。`,
+              defense: `跌破 ${stopLossPrice} 元代表防守線失守，應果斷停損出場。`
+            },
+            sell: {
+              badge: '🔴 建議賣出',
+              actionTitle: '逢高減碼 · 避開風險',
+              themeColor: '#ef4444',
+              bgColor: 'rgba(239, 68, 68, 0.1)',
+              borderColor: 'rgba(239, 68, 68, 0.35)',
+              emptyHand: `技術結構轉弱或面臨修正，空手者請在場外觀望，切勿進場盲目接刀。`,
+              holding: `持有者建議逢反彈至 ${takeProfitPrice} 元分批減碼；若跌破 ${stopLossPrice} 元請停損退場。`,
+              defense: `跌破 ${stopLossPrice} 元無條件出場保命，保留資金等待回穩。`
+            },
+            wait: {
+              badge: '🟡 暫宜觀望',
+              actionTitle: '靜待表態 · 不隨意進場',
+              themeColor: '#f59e0b',
+              bgColor: 'rgba(245, 158, 11, 0.1)',
+              borderColor: 'rgba(245, 158, 11, 0.35)',
+              emptyHand: `多空拉鋸或處於區間整理，空手者建議場外等待方向確立再動作。`,
+              holding: `持股者緊盯關鍵防守價 ${stopLossPrice} 元，守穩續抱、破線減碼。`,
+              defense: `跌破 ${stopLossPrice} 元防線嚴格離場，預防盤整轉為破底。`
+            }
+          }[actionType];
+
           return (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '12px', marginBottom: '14px', alignItems: 'start' }}>
-              
-              {/* 1. 逢低掛單買進價 */}
-              <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '10px', padding: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#6ee7b7', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <TrendingUp size={16} /> 🟢 逢低買進掛單價
-                  </span>
-                  <span style={{ fontSize: '0.72rem', background: 'rgba(16, 185, 129, 0.2)', color: '#a7f3d0', padding: '2px 6px', borderRadius: '4px' }}>
-                    支撐承接
+            <div>
+              {/* 新手極簡操作指引卡 */}
+              <div style={{
+                background: actionConfig.bgColor,
+                border: `1.5px solid ${actionConfig.borderColor}`,
+                borderRadius: '12px',
+                padding: '16px 18px',
+                marginBottom: '16px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={{
+                      padding: '5px 14px',
+                      borderRadius: '8px',
+                      background: actionConfig.themeColor,
+                      color: '#ffffff',
+                      fontWeight: '900',
+                      fontSize: '1rem',
+                      letterSpacing: '0.5px'
+                    }}>
+                      {actionConfig.badge}
+                    </span>
+                    <span style={{ fontSize: '0.85rem', color: '#e2e8f0', fontWeight: '700' }}>
+                      {actionConfig.actionTitle}
+                    </span>
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: '#94a3b8', background: 'rgba(0,0,0,0.3)', padding: '3px 8px', borderRadius: '6px' }}>
+                    新手極簡白話速讀
                   </span>
                 </div>
-                <div className="font-mono" style={{ fontSize: '1.7rem', fontWeight: '800', color: '#34d399', marginBottom: '4px' }}>
-                  {buyPrice} <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>元</span>
+
+                {/* 雙情境極簡說明 */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '10px', marginTop: '8px' }}>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '10px 12px', borderRadius: '8px', borderLeft: `3px solid ${actionConfig.themeColor}` }}>
+                    <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: '700', marginBottom: '2px' }}>
+                      【空手新手 · 還沒買】
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: '#f8fafc', lineHeight: '1.45' }}>
+                      {actionConfig.emptyHand}
+                    </div>
+                  </div>
+
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '10px 12px', borderRadius: '8px', borderLeft: '3px solid #60a5fa' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: '700', marginBottom: '2px' }}>
+                      【持股新手 · 手上有】
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: '#f8fafc', lineHeight: '1.45' }}>
+                      {actionConfig.holding}
+                    </div>
+                  </div>
                 </div>
-                <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0, lineHeight: '1.4' }}>
-                  {booking.buyNote || '拉回第一道地板或 MA5 均線時逢低分批低接'}
-                </p>
+
+                {/* 保命防守線 */}
+                <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.1)', padding: '6px 12px', borderRadius: '6px', border: '1px solid rgba(245, 158, 11, 0.25)' }}>
+                  <ShieldAlert size={14} color="#fbbf24" style={{ flexShrink: 0 }} />
+                  <span><b>新手保命防守線：</b>{actionConfig.defense}</span>
+                </div>
               </div>
 
-              {/* 2. 逢高掛單停利價 */}
-              <div style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '10px', padding: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#fca5a5', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Target size={16} /> 🔴 逢高停利掛單價
-                  </span>
-                  <span style={{ fontSize: '0.72rem', background: 'rgba(239, 68, 68, 0.2)', color: '#fecaca', padding: '2px 6px', borderRadius: '4px' }}>
-                    天花板壓力
-                  </span>
+              {/* 三格精準價位掛單卡片 */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '12px', marginBottom: '14px', alignItems: 'start' }}>
+                
+                {/* 1. 買進掛單價 */}
+                <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '10px', padding: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '0.85rem', color: '#6ee7b7', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <TrendingUp size={16} /> 🟢 逢低買進掛單價
+                    </span>
+                    <span style={{ fontSize: '0.72rem', background: 'rgba(16, 185, 129, 0.2)', color: '#a7f3d0', padding: '2px 6px', borderRadius: '4px' }}>
+                      支撐低接
+                    </span>
+                  </div>
+                  <div className="font-mono" style={{ fontSize: '1.7rem', fontWeight: '800', color: '#34d399', marginBottom: '4px' }}>
+                    {buyPrice} <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>元</span>
+                  </div>
+                  <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0, lineHeight: '1.4' }}>
+                    {booking.buyNote || '拉回關鍵支撐或 MA5 均線時逢低分批低接'}
+                  </p>
                 </div>
-                <div className="font-mono" style={{ fontSize: '1.7rem', fontWeight: '800', color: '#f87171', marginBottom: '4px' }}>
-                  {takeProfitPrice} <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>元</span>
+
+                {/* 2. 停利掛單價 */}
+                <div style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '10px', padding: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '0.85rem', color: '#fca5a5', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Target size={16} /> 🔴 逢高賣出停利價
+                    </span>
+                    <span style={{ fontSize: '0.72rem', background: 'rgba(239, 68, 68, 0.2)', color: '#fecaca', padding: '2px 6px', borderRadius: '4px' }}>
+                      天花板壓力
+                    </span>
+                  </div>
+                  <div className="font-mono" style={{ fontSize: '1.7rem', fontWeight: '800', color: '#f87171', marginBottom: '4px' }}>
+                    {takeProfitPrice} <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>元</span>
+                  </div>
+                  <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0, lineHeight: '1.4' }}>
+                    {booking.takeProfitNote || '衝高遇第一道天花板或前高阻力分批獲利了結'}
+                  </p>
                 </div>
-                <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0, lineHeight: '1.4' }}>
-                  {booking.takeProfitNote || '衝高遇第一道天花板或前波高點分批停利入袋'}
-                </p>
+
+                {/* 3. 嚴格防守停損價 */}
+                <div style={{ background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '10px', padding: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '0.85rem', color: '#fcd34d', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <ShieldAlert size={16} /> 🛡️ 破線停損出場價
+                    </span>
+                    <span style={{ fontSize: '0.72rem', background: 'rgba(245, 158, 11, 0.2)', color: '#fef3c7', padding: '2px 6px', borderRadius: '4px' }}>
+                      最後防線
+                    </span>
+                  </div>
+                  <div className="font-mono" style={{ fontSize: '1.7rem', fontWeight: '800', color: '#fbbf24', marginBottom: '4px' }}>
+                    {stopLossPrice} <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>元</span>
+                  </div>
+                  <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0, lineHeight: '1.4' }}>
+                    {booking.stopLossNote || '跌破 MA20 月線或關鍵地板需無條件保命出場'}
+                  </p>
+                </div>
+
               </div>
 
-              {/* 3. 嚴格防守停損價 */}
-              <div style={{ background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '10px', padding: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#fcd34d', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <ShieldAlert size={16} /> 🛡️ 破線停損出場價
-                  </span>
-                  <span style={{ fontSize: '0.72rem', background: 'rgba(245, 158, 11, 0.2)', color: '#fef3c7', padding: '2px 6px', borderRadius: '4px' }}>
-                    最後防線
-                  </span>
+              {/* 簡潔直白白話指引 */}
+              {prediction.beginnerAdvice && (
+                <div style={{ background: 'rgba(0,0,0,0.25)', padding: '12px 14px', borderRadius: '8px', fontSize: '0.88rem', color: '#e2e8f0', lineHeight: '1.5' }}>
+                  <strong style={{ color: '#60a5fa' }}>💡 操作守則速覽：</strong>{prediction.beginnerAdvice}
                 </div>
-                <div className="font-mono" style={{ fontSize: '1.7rem', fontWeight: '800', color: '#fbbf24', marginBottom: '4px' }}>
-                  {stopLossPrice} <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>元</span>
-                </div>
-                <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0, lineHeight: '1.4' }}>
-                  {booking.stopLossNote || '跌破 MA20 月線或關鍵地板需無條件保命出場'}
-                </p>
-              </div>
-
+              )}
             </div>
           );
         })()}
-
-        {/* 簡潔直白白話指引 */}
-        {prediction.beginnerAdvice && (
-          <div style={{ background: 'rgba(0,0,0,0.25)', padding: '12px 14px', borderRadius: '8px', fontSize: '0.88rem', color: '#e2e8f0', lineHeight: '1.5' }}>
-            <strong style={{ color: '#60a5fa' }}>💡 操作守則速覽：</strong>{prediction.beginnerAdvice}
-          </div>
-        )}
       </div>
 
       {/* 3. 明日走勢推演 & 關鍵天花板與地板階梯 */}
